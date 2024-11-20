@@ -605,9 +605,12 @@ class HanaDB(VectorStore):
 
                 if operator == CONTAINS_OPERATOR:
                     if key  == self.content_column or key in self.specific_metadata_columns:
-                        where_str += f"SCORE('{special_val}' IN (\"{key}\" EXACT SEARCH MODE \'text\')) > 0"
+                        where_str += f"SCORE(? IN (\"{key}\" EXACT SEARCH MODE \'text\')) > 0"
+                        query_tuple.append(special_val)
                     else:
-                        where_str += f'SCORE (\'%{key}: "{special_val}"%\' IN {self.metadata_column} EXACT SEARCH MODE \'TEXT\') > 0'
+                        where_str += f'SCORE (? IN {self.metadata_column} EXACT SEARCH MODE \'TEXT\') > 0'
+                        query_tuple.append(f'%{key}: "{special_val}"%')
+
 
                 else:
                     # Handle structured attribute filters
