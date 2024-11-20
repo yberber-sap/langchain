@@ -57,7 +57,7 @@ LIKE_OPERATOR = "$like"
 
 LOGICAL_OPERATORS_TO_SQL = {"$and": "AND", "$or": "OR"}
 
-KEYWORD_SEARCH_OPERATOR = "$keyword"
+CONTAINS_OPERATOR = "$contains"
 
 
 default_distance_strategy = DistanceStrategy.COSINE
@@ -575,6 +575,10 @@ class HanaDB(VectorStore):
                     elif special_op == LIKE_OPERATOR:
                         operator = "LIKE"
                         query_tuple.append(special_val)
+                    # "contains"
+                    elif special_op == CONTAINS_OPERATOR:
+                        operator = CONTAINS_OPERATOR
+                        # query_tuple.append(special_val)
                     # "$in", "$nin"
                     elif special_op in IN_OPERATORS_TO_SQL:
                         operator = IN_OPERATORS_TO_SQL[special_op]
@@ -599,9 +603,12 @@ class HanaDB(VectorStore):
                         f"Unsupported filter data-type: {type(filter_value)}"
                     )
 
-                if key == KEYWORD_SEARCH_OPERATOR:
-                    # Handle keyword search with SCORE
-                    where_str += f"SCORE(? IN (VEC_TEXT FUZZY SEARCH MODE \'text\')) = 1"
+                if operator == CONTAINS_OPERATOR:
+                    if key  == self.content_column or key in self.specific_metadata_columns:
+                        where_str += f"SCORE('{special_val}' IN (\"{key}\" EXACT SEARCH MODE \'text\')) > 0"
+                    else:
+                        where_str += f'SCORE (\'%{key}: "{special_val}"%\' IN {self.metadata_column} EXACT SEARCH MODE \'TEXT\') > 0'
+
                 else:
                     # Handle structured attribute filters
                     selector = (
@@ -610,6 +617,10 @@ class HanaDB(VectorStore):
                         else f"JSON_VALUE({self.metadata_column}, '$.{key}')"
                     )
                     where_str += f"{selector} " f"{operator} {sql_param}"
+
+                if key in CONTAINS_OPERATOR:
+                    print(key)
+                    print(" is in specific metadata columns")
 
         return where_str, query_tuple
 

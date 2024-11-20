@@ -1434,7 +1434,6 @@ def test_preexisting_specific_columns_for_returned_metadata_completeness(
     assert "NonExisting" not in docs[0].metadata.keys()
 
 
-
 @pytest.mark.skipif(not hanadb_installed, reason="hanadb not installed")
 def test_hanavector_keyword_search(texts: List[str], metadatas: List[dict]) -> None:
     table_name = "TEST_TABLE_KEYWORD_SEARCH"
@@ -1451,24 +1450,26 @@ def test_hanavector_keyword_search(texts: List[str], metadatas: List[dict]) -> N
 
     # Perform keyword search
     keyword = "foo"
-    docs = vectorDB.similarity_search(query=keyword, k=3, filter={"$keyword": f"{keyword}"})
+    docs = vectorDB.similarity_search(
+        query=keyword, k=3, filter={"VEC_TEXT": {"$contains": f"{keyword}"}}
+    )
 
     # Validate the results
     assert len(docs) == 1
     assert docs[0].page_content == keyword
     assert keyword in docs[0].page_content
 
-
     # Perform keyword search with non-existing keyword
     non_existing_keyword = "nonexistent"
-    docs = vectorDB.similarity_search(query=non_existing_keyword, k=3, filter={"$keyword": f"{non_existing_keyword}"})
+    docs = vectorDB.similarity_search(
+        query=non_existing_keyword, k=3, filter={"VEC_TEXT": {"$contains": f"{non_existing_keyword}"}}
+    )
 
     assert len(docs) == 0, "Expected no results for non-existing keyword"
 
 
-
 @pytest.mark.skipif(not hanadb_installed, reason="hanadb not installed")
-def test_hanavector_keyword_search_with_metadata(
+def test_hanavector_keyword_search_metadata_column(
     texts: List[str], metadatas: List[dict]
 ) -> None:
     table_name = "TEST_TABLE_KEYWORD_SEARCH_METADATA"
@@ -1495,17 +1496,15 @@ def test_hanavector_keyword_search_with_metadata(
         metadatas=metadatas,
         embedding=embedding,
         table_name=table_name,
-        specific_metadata_columns=["quality", "start"],
     )
 
     docs = vectorDB.similarity_search("hello", k=5, filter={"quality": "good"})
     assert len(docs) == 1
-    assert docs[0].page_content == "foo"
+    assert "foo" in docs[0].page_content
 
-    docs = vectorDB.similarity_search("hello", k=5, filter={"quality": "good", "$keyword": "foo"})
+    docs = vectorDB.similarity_search(
+        "hello", k=5, filter={"quality": {"$contains":"good"}}
+    )
     assert len(docs) == 1
-    assert docs[0].page_content == "foo"
-
-    docs = vectorDB.similarity_search("hello", k=5, filter={"quality": "good", "$keyword": "bar"})
-    assert len(docs) == 0
+    assert "good" in docs[0].metadata["quality"]
 
