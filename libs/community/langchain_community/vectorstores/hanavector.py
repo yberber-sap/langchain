@@ -578,7 +578,6 @@ class HanaDB(VectorStore):
                     # "contains"
                     elif special_op == CONTAINS_OPERATOR:
                         operator = CONTAINS_OPERATOR
-                        # query_tuple.append(special_val)
                     # "$in", "$nin"
                     elif special_op in IN_OPERATORS_TO_SQL:
                         operator = IN_OPERATORS_TO_SQL[special_op]
@@ -609,7 +608,7 @@ class HanaDB(VectorStore):
                         query_tuple.append(special_val)
                     else:
                         where_str += f'SCORE (? IN {self.metadata_column} EXACT SEARCH MODE \'TEXT\') > 0'
-                        query_tuple.append(f'%{key}: "{special_val}"%')
+                        query_tuple.append(f"'{key}:  %{special_val}%'")
 
 
                 else:
