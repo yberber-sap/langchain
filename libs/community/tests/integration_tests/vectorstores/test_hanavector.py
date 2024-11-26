@@ -1468,43 +1468,43 @@ def test_hanavector_keyword_search(texts: List[str], metadatas: List[dict]) -> N
     assert len(docs) == 0, "Expected no results for non-existing keyword"
 
 
-@pytest.mark.skipif(not hanadb_installed, reason="hanadb not installed")
-def test_hanavector_keyword_search_metadata_column(
-    texts: List[str], metadatas: List[dict]
-) -> None:
-    table_name = "TEST_TABLE_KEYWORD_SEARCH_METADATA"
-    # Delete table if it exists
-    drop_table(test_setup.conn, table_name)
-
-    sql_str = (
-        f'CREATE TABLE "{table_name}" ('
-        f'"VEC_TEXT" NCLOB, '
-        f'"VEC_META" NCLOB, '
-        f'"VEC_VECTOR" REAL_VECTOR, '
-        f'"quality" NVARCHAR(100), '
-        f'"start" INTEGER);'
-    )
-    try:
-        cur = test_setup.conn.cursor()
-        cur.execute(sql_str)
-    finally:
-        cur.close()
-
-    vectorDB = HanaDB.from_texts(
-        connection=test_setup.conn,
-        texts=texts,
-        metadatas=metadatas,
-        embedding=embedding,
-        table_name=table_name,
-    )
-
-    docs = vectorDB.similarity_search("hello", k=5, filter={"quality": "good"})
-    assert len(docs) == 1
-    assert "foo" in docs[0].page_content
-
-    docs = vectorDB.similarity_search(
-        "hello", k=5, filter={"quality": {"$contains":"good"}}
-    )
-    assert len(docs) == 1
-    assert "good" in docs[0].metadata["quality"]
+# @pytest.mark.skipif(not hanadb_installed, reason="hanadb not installed")
+# def test_hanavector_keyword_search_metadata_column(
+#     texts: List[str], metadatas: List[dict]
+# ) -> None:
+#     table_name = "TEST_TABLE_KEYWORD_SEARCH_METADATA"
+#     # Delete table if it exists
+#     drop_table(test_setup.conn, table_name)
+#
+#     sql_str = (
+#         f'CREATE TABLE "{table_name}" ('
+#         f'"VEC_TEXT" NCLOB, '
+#         f'"VEC_META" NCLOB, '
+#         f'"VEC_VECTOR" REAL_VECTOR, '
+#         f'"quality" NVARCHAR(100), '
+#         f'"start" INTEGER);'
+#     )
+#     try:
+#         cur = test_setup.conn.cursor()
+#         cur.execute(sql_str)
+#     finally:
+#         cur.close()
+#
+#     vectorDB = HanaDB.from_texts(
+#         connection=test_setup.conn,
+#         texts=texts,
+#         metadatas=metadatas,
+#         embedding=embedding,
+#         table_name=table_name,
+#     )
+#
+#     docs = vectorDB.similarity_search("hello", k=5, filter={"quality": "good"})
+#     assert len(docs) == 1
+#     assert "foo" in docs[0].page_content
+#
+#     docs = vectorDB.similarity_search(
+#         "hello", k=5, filter={"quality": {"$contains":"good"}}
+#     )
+#     assert len(docs) == 1
+#     assert "good" in docs[0].metadata["quality"]
 

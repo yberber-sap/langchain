@@ -59,6 +59,8 @@ LOGICAL_OPERATORS_TO_SQL = {"$and": "AND", "$or": "OR"}
 
 CONTAINS_OPERATOR = "$contains"
 
+INTERMEDIATE_TABLE_NAME = "intermediate_result"
+
 
 default_distance_strategy = DistanceStrategy.COSINE
 default_table_name: str = "EMBEDDINGS"
@@ -418,6 +420,85 @@ class HanaDB(VectorStore):
             embedding=embedding, k=k, filter=filter
         )
 
+    def _extract_keyword_search_columns(self, filter: Optional[dict] = None) -> List[str]:
+        """Extract metadata columns involved in keyword search."""
+        keyword_columns = set()
+
+        def recurse_filters(f, parent_key=None):
+            if isinstance(f, Dict):
+                for key, value in f.items():
+                    if key == "$contains":
+                        # Add the parent key as it's the metadata column being filtered
+                        if parent_key and not (parent_key == self.content_column or parent_key in self.specific_metadata_columns) :
+                            keyword_columns.add(parent_key)
+                    elif key in ["$and", "$or"]:  # Handle logical operators
+                        for subfilter in value:
+                            recurse_filters(subfilter)
+                    else:
+                        recurse_filters(value, parent_key=key)
+            # elif isinstance(f, list):  # Handle lists of filters (logical operator operands)
+            #     for item in f:
+            #         recurse_filters(item)
+
+        recurse_filters(filter)
+        return list(keyword_columns)
+
+
+    def _create_metadata_projection(self, keyword_search_metadata_columns) -> str:
+        """
+        Create the SQL subquery for projecting metadata columns.
+
+        Returns:
+            SQL `WITH` clause as a string.
+        """
+        metadata_columns = [
+            f'JSON_VALUE({self.metadata_column}, \'$.{col}\') AS "{col}"'
+            for col in keyword_search_metadata_columns
+        ]
+        return (
+            f"WITH {INTERMEDIATE_TABLE_NAME} AS ("
+            f"SELECT *, {', '.join(metadata_columns)} "
+            f'FROM "{self.table_name}")'
+        )
+
+    def build_similarity_query_without_cosine_similarity_for_testing(
+            self,  filter: Optional[dict] = None, k: int = 4
+    ) -> Tuple[str, List[Any]]:
+        """
+        Build the SQL query for similarity search.
+
+        Args:
+            embedding: Embedding vector for similarity search.
+            k: Number of results to return.
+            filter: Metadata filter dictionary.
+
+        Returns:
+            SQL query string and query tuple for parameterized execution.
+        """
+        k = HanaDB._sanitize_int(k)
+
+        keyword_search_metadata_columns = self._extract_keyword_search_columns(filter)
+        metadata_projection = ""
+        if keyword_search_metadata_columns:
+            metadata_projection = self._create_metadata_projection(keyword_search_metadata_columns)
+
+        table_name = "\"" + self.table_name + "\""
+        sql_str = (
+            f"{metadata_projection} "
+            f"SELECT TOP {k}"
+            f'  "{self.content_column}", '  # row[0]
+            f'  "{self.metadata_column}", '  # row[1]
+            f'  TO_NVARCHAR("{self.vector_column}") '  # row[2]
+            f'FROM {INTERMEDIATE_TABLE_NAME if metadata_projection else table_name}'
+        )
+
+        order_str = f" order by CS {HANA_DISTANCE_FUNCTION[self.distance_strategy][1]}"
+        where_str, query_tuple = self._create_where_by_filter(filter)
+        sql_str = sql_str + where_str
+        sql_str = sql_str + order_str
+
+        return sql_str, query_tuple
+
     def similarity_search_with_score_and_vector_by_vector(
         self, embedding: List[float], k: int = 4, filter: Optional[dict] = None
     ) -> List[Tuple[Document, float, List[float]]]:
@@ -437,14 +518,22 @@ class HanaDB(VectorStore):
         k = HanaDB._sanitize_int(k)
         embedding = HanaDB._sanitize_list_float(embedding)
         distance_func_name = HANA_DISTANCE_FUNCTION[self.distance_strategy][0]
+
+        keyword_search_metadata_columns = self._extract_keyword_search_columns(filter)
+        metadata_projection = ""
+        if keyword_search_metadata_columns:
+            metadata_projection = self._create_metadata_projection(keyword_search_metadata_columns)
+
+        table_name = "\"" + self.table_name + "\""
         sql_str = (
+            f"{metadata_projection} "
             f"SELECT TOP {k}"
             f'  "{self.content_column}", '  # row[0]
             f'  "{self.metadata_column}", '  # row[1]
             f'  TO_NVARCHAR("{self.vector_column}"), '  # row[2]
             f'  {distance_func_name}("{self.vector_column}", TO_REAL_VECTOR '
             f"     ('{str(embedding)}')) AS CS "  # row[3]
-            f'FROM "{self.table_name}"'
+            f'FROM {INTERMEDIATE_TABLE_NAME if metadata_projection else table_name}'
         )
         order_str = f" order by CS {HANA_DISTANCE_FUNCTION[self.distance_strategy][1]}"
         where_str, query_tuple = self._create_where_by_filter(filter)
@@ -603,12 +692,15 @@ class HanaDB(VectorStore):
                     )
 
                 if operator == CONTAINS_OPERATOR:
-                    if key  == self.content_column or key in self.specific_metadata_columns:
-                        where_str += f"SCORE(? IN (\"{key}\" EXACT SEARCH MODE \'text\')) > 0"
-                        query_tuple.append(special_val)
-                    else:
-                        where_str += f'SCORE (? IN {self.metadata_column} EXACT SEARCH MODE \'TEXT\') > 0'
-                        query_tuple.append(f"'{key}:  %{special_val}%'")
+                    where_str += f"SCORE(? IN (\"{key}\" EXACT SEARCH MODE \'text\')) > 0"
+                    query_tuple.append(special_val)
+
+                    # if key  == self.content_column or key in self.specific_metadata_columns:
+                    #     where_str += f"SCORE(? IN (\"{key}\" EXACT SEARCH MODE \'text\')) > 0"
+                    #     query_tuple.append(special_val)
+                    # else:
+                    #     where_str += f'SCORE (? IN {self.metadata_column} EXACT SEARCH MODE \'TEXT\') > 0'
+                    #     query_tuple.append(f"'{key}:  %{special_val}%'")
 
 
                 else:
