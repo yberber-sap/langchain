@@ -16,6 +16,7 @@ from typing import (
     Pattern,
     Tuple,
     Type,
+    Union
 )
 
 import numpy as np
@@ -120,6 +121,8 @@ class HanaDB(VectorStore):
         self.specific_metadata_columns = HanaDB._sanitize_specific_metadata_columns(
             specific_metadata_columns or []
         )
+
+        self.use_internal_embeddings = True if isinstance(embedding, str) else False
 
         # Check if the table exists, and eventually create it
         if not self._table_exists(self.table_name):
@@ -362,7 +365,7 @@ class HanaDB(VectorStore):
             List[str]: empty list
         """
         # Create all embeddings of the texts beforehand to improve performance
-        if embeddings is None:
+        if embeddings is None and not self.use_internal_embeddings:
             embeddings = self.embedding.embed_documents(list(texts))
 
         # Create sql parameters array
@@ -372,19 +375,29 @@ class HanaDB(VectorStore):
             metadata, extracted_special_metadata = self._split_off_special_metadata(
                 metadata
             )
-            embedding = (
-                embeddings[i]
-                if embeddings
-                else self.embedding.embed_documents([text])[0]
-            )
-            sql_params.append(
-                (
-                    text,
-                    json.dumps(HanaDB._sanitize_metadata_keys(metadata)),
-                    f"[{','.join(map(str, embedding))}]",
-                    *extracted_special_metadata,
+            if not self.use_internal_embeddings:
+                embedding = (
+                    embeddings[i]
+                    if embeddings
+                    else self.embedding.embed_documents([text])[0]
                 )
-            )
+                sql_params.append(
+                    (
+                        text,
+                        json.dumps(HanaDB._sanitize_metadata_keys(metadata)),
+                        f"[{','.join(map(str, embedding))}]",
+                        *extracted_special_metadata,
+                    )
+                )
+            else:
+                parameters = {
+                    "content": text,  # Replace `content_value` with the actual value
+                    "metadata": json.dumps(HanaDB._sanitize_metadata_keys(metadata)),  # Replace `metadata_value` with the actual value
+                    "model_version": self.embedding,  # Replace `vector_value` with the actual vector value
+                }
+                parameters.update({col: value for col, value in zip(self.specific_metadata_columns,
+                                                                    extracted_special_metadata)})  # specific_metadata_values must align with the columns
+                sql_params.append(parameters)
 
         # Insert data into the table
         cur = self.connection.cursor()
@@ -396,14 +409,26 @@ class HanaDB(VectorStore):
                 specific_metadata_columns_string = (
                     ', "' + specific_metadata_columns_string + '"'
                 )
-            sql_str = (
-                f'INSERT INTO "{self.table_name}" ("{self.content_column}", '
-                f'"{self.metadata_column}", '
-                f'"{self.vector_column}"{specific_metadata_columns_string}) '
-                f"VALUES (?, ?, TO_REAL_VECTOR (?)"
-                f"{', ?' * len(self.specific_metadata_columns)});"
-            )
+            if self.use_internal_embeddings:
+                specific_metadata_placeholders = ", ".join(f":{col}" for col in self.specific_metadata_columns)
+                sql_str = (
+                    f'INSERT INTO "{self.table_name}" ("{self.content_column}", '
+                    f'"{self.metadata_column}", '
+                    f'"{self.vector_column}"{specific_metadata_columns_string}) '
+                    f"VALUES (:content, :metadata, VECTOR_EMBEDDING(:content, 'DOCUMENT', :model_version) "
+                    f"{(', ' + specific_metadata_placeholders) if specific_metadata_placeholders else ''});"
+                )
+            else:
+                sql_str = (
+                    f'INSERT INTO "{self.table_name}" ("{self.content_column}", '
+                    f'"{self.metadata_column}", '
+                    f'"{self.vector_column}"{specific_metadata_columns_string}) '
+                    f"VALUES (?, ?, TO_REAL_VECTOR (?)"
+                    f"{', ?' * len(self.specific_metadata_columns)});"
+                )
             cur.executemany(sql_str, sql_params)
+            print(f"==> cur.executemany was called with the sql_str: \"{sql_str}\"")
+
         finally:
             cur.close()
         return []
@@ -480,9 +505,12 @@ class HanaDB(VectorStore):
             List of tuples (containing a Document and a score) that are
             most similar to the query
         """
-        embedding = self.embedding.embed_query(query)
+        if not self.use_internal_embeddings:
+            embedding_or_query = self.embedding.embed_query(query)
+        else:
+            embedding_or_query = query
         return self.similarity_search_with_score_by_vector(
-            embedding=embedding, k=k, filter=filter
+            embedding_or_query=embedding_or_query, k=k, filter=filter
         )
 
     def _extract_keyword_search_columns(
@@ -561,7 +589,7 @@ class HanaDB(VectorStore):
         )
 
     def similarity_search_with_score_and_vector_by_vector(
-        self, embedding: List[float], k: int = 4, filter: Optional[dict] = None
+        self, embedding_or_query: Union[List[float], str], k: int = 4, filter: Optional[dict] = None
     ) -> List[Tuple[Document, float, List[float]]]:
         """Return docs most similar to the given embedding.
 
@@ -577,7 +605,8 @@ class HanaDB(VectorStore):
         """
         result = []
         k = HanaDB._sanitize_int(k)
-        embedding = HanaDB._sanitize_list_float(embedding)
+        if not self.use_internal_embeddings:
+            embedding = HanaDB._sanitize_list_float(embedding_or_query)
         distance_func_name = HANA_DISTANCE_FUNCTION[self.distance_strategy][0]
 
         projected_metadata_columns = self._extract_keyword_search_columns(filter)
@@ -590,23 +619,38 @@ class HanaDB(VectorStore):
         from_clause = (
             INTERMEDIATE_TABLE_NAME if metadata_projection else f'"{self.table_name}"'
         )
-        sql_str = (
-            f"{metadata_projection} "
-            f"SELECT TOP {k}"
-            f'  "{self.content_column}", '  # row[0]
-            f'  "{self.metadata_column}", '  # row[1]
-            f'  TO_NVARCHAR("{self.vector_column}"), '  # row[2]
-            f'  {distance_func_name}("{self.vector_column}", TO_REAL_VECTOR '
-            f"     ('{str(embedding)}')) AS CS "  # row[3]
-            f"FROM {from_clause}"
-        )
+        if not self.use_internal_embeddings:
+            sql_str = (
+                f"{metadata_projection} "
+                f"SELECT TOP {k}"
+                f'  "{self.content_column}", '  # row[0]
+                f'  "{self.metadata_column}", '  # row[1]
+                f'  TO_NVARCHAR("{self.vector_column}"), '  # row[2]
+                f'  {distance_func_name}("{self.vector_column}", TO_REAL_VECTOR '
+                f"     ('{str(embedding)}')) AS CS "  # row[3]
+                f"FROM {from_clause}"
+            )
+        else:
+            sql_str = (
+                f"{metadata_projection} "
+                f"SELECT TOP {k}"
+                f'  "{self.content_column}", '  # row[0]
+                f'  "{self.metadata_column}", '  # row[1]
+                f'  TO_NVARCHAR("{self.vector_column}"), '  # row[2]
+                f'  {distance_func_name}("{self.vector_column}", VECTOR_EMBEDDING(?, \'QUERY\', ?)) AS CS '  # row[3]
+                f"FROM {from_clause}"
+            )
+
         order_str = f" order by CS {HANA_DISTANCE_FUNCTION[self.distance_strategy][1]}"
         where_str, query_tuple = self._create_where_by_filter(filter)
+        if self.use_internal_embeddings:
+            query_tuple = [embedding_or_query, self.embedding] + list(query_tuple)
         sql_str = sql_str + where_str
         sql_str = sql_str + order_str
         try:
             cur = self.connection.cursor()
             cur.execute(sql_str, query_tuple)
+            print(f"-> cur.execute was called with the sql_str: \"{sql_str}\"")
             if cur.has_result_set():
                 rows = cur.fetchall()
                 for row in rows:
@@ -619,7 +663,7 @@ class HanaDB(VectorStore):
         return result
 
     def similarity_search_with_score_by_vector(
-        self, embedding: List[float], k: int = 4, filter: Optional[dict] = None
+        self, embedding_or_query: Union[List[float], str], k: int = 4, filter: Optional[dict] = None
     ) -> List[Tuple[Document, float]]:
         """Return docs most similar to the given embedding.
 
@@ -633,7 +677,7 @@ class HanaDB(VectorStore):
             List of Documents most similar to the query and score for each
         """
         whole_result = self.similarity_search_with_score_and_vector_by_vector(
-            embedding=embedding, k=k, filter=filter
+            embedding_or_query=embedding_or_query, k=k, filter=filter
         )
         return [(result_item[0], result_item[1]) for result_item in whole_result]
 
