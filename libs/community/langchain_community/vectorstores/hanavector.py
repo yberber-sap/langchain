@@ -513,14 +513,16 @@ class HanaDB(VectorStore):
         ) -> None:
             if isinstance(f, Dict):
                 for key, value in f.items():
-                    if key == "$contains":
+                    if key == CONTAINS_OPERATOR:
                         # Add the parent key as it's the metadata column being filtered
                         if parent_key and not (
                             parent_key == self.content_column
                             or parent_key in self.specific_metadata_columns
                         ):
                             keyword_columns.add(parent_key)
-                    elif key in ["$and", "$or"]:  # Handle logical operators
+                    elif (
+                        key in LOGICAL_OPERATORS_TO_SQL.keys()
+                    ):  # Handle logical operators
                         for subfilter in value:
                             recurse_filters(subfilter)
                     else:
@@ -557,7 +559,7 @@ class HanaDB(VectorStore):
         return (
             f"WITH {INTERMEDIATE_TABLE_NAME} AS ("
             f"SELECT *, {', '.join(metadata_columns)} "
-            f'FROM "{self.table_name}")'
+            f"FROM \"{self.table_name}\")"
         )
 
     def similarity_search_with_score_and_vector_by_vector(
