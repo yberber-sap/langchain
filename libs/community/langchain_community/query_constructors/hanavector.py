@@ -28,13 +28,13 @@ class HanaTranslator(Visitor):
         Comparator.LTE,
         Comparator.IN,
         Comparator.NIN,
-        # Comparator.CONTAIN,
+        Comparator.CONTAIN,
         Comparator.LIKE,
     ]
 
     def _format_func(self, func: Union[Operator, Comparator]) -> str:
         self._validate_func(func)
-        return f"${func.value}"
+        return f"${'contains' if func == Comparator.CONTAIN else func.value}"
 
     def visit_operation(self, operation: Operation) -> Dict:
         args = [arg.accept(self) for arg in operation.arguments]
