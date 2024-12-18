@@ -24,7 +24,7 @@ RDF Schema (in Turtle):
 
 User request: {prompt}
 
-Please write output only a SPARQL query that retrieves the requested information.
+Please write only a SPARQL query that retrieves the requested information. Do not wrap your answer in backticks or code fences.
 """
 HANA_GRAPH_SPARQL_GENERATION_PROMPT = PromptTemplate(
     input_variables=["schema", "prompt"],
