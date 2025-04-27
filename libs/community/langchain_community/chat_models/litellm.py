@@ -48,6 +48,7 @@ from langchain_core.messages import (
     ToolCallChunk,
     ToolMessage,
 )
+from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import (
     ChatGeneration,
     ChatGenerationChunk,
@@ -410,14 +411,19 @@ class ChatLiteLLM(BaseChatModel):
 
     def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
         generations = []
+        token_usage = response.get("usage", {})
         for res in response["choices"]:
             message = _convert_dict_to_message(res["message"])
+            if isinstance(message, AIMessage):
+                message.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                message.usage_metadata = _create_usage_metadata(token_usage)
             gen = ChatGeneration(
                 message=message,
                 generation_info=dict(finish_reason=res.get("finish_reason")),
             )
             generations.append(gen)
-        token_usage = response.get("usage", {})
         set_model_value = self.model
         if self.model_name is not None:
             set_model_value = self.model_name
@@ -446,6 +452,7 @@ class ChatLiteLLM(BaseChatModel):
         params = {**params, **kwargs, "stream": True}
 
         default_chunk_class = AIMessageChunk
+        added_model_name = False
         for chunk in self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         ):
@@ -454,7 +461,15 @@ class ChatLiteLLM(BaseChatModel):
             if len(chunk["choices"]) == 0:
                 continue
             delta = chunk["choices"][0]["delta"]
+            usage = chunk.get("usage", {})
             chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+            if isinstance(chunk, AIMessageChunk):
+                if not added_model_name:
+                    chunk.response_metadata = {
+                        "model_name": self.model_name or self.model
+                    }
+                    added_model_name = True
+                chunk.usage_metadata = _create_usage_metadata(usage)
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
             if run_manager:
@@ -472,6 +487,7 @@ class ChatLiteLLM(BaseChatModel):
         params = {**params, **kwargs, "stream": True}
 
         default_chunk_class = AIMessageChunk
+        added_model_name = False
         async for chunk in await acompletion_with_retry(
             self, messages=message_dicts, run_manager=run_manager, **params
         ):
@@ -480,7 +496,15 @@ class ChatLiteLLM(BaseChatModel):
             if len(chunk["choices"]) == 0:
                 continue
             delta = chunk["choices"][0]["delta"]
+            usage = chunk.get("usage", {})
             chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+            if isinstance(chunk, AIMessageChunk):
+                if not added_model_name:
+                    chunk.response_metadata = {
+                        "model_name": self.model_name or self.model
+                    }
+                    added_model_name = True
+                chunk.usage_metadata = _create_usage_metadata(usage)
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
             if run_manager:
@@ -585,3 +609,13 @@ class ChatLiteLLM(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         return "litellm-chat"
+
+
+def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
+    input_tokens = token_usage.get("prompt_tokens", 0)
+    output_tokens = token_usage.get("completion_tokens", 0)
+    return UsageMetadata(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )

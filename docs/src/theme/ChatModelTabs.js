@@ -136,6 +136,13 @@ ${llmVarName} = AzureChatOpenAI(
       packageName: "langchain[openai]",
     },
     {
+      value: "google_genai",
+      label: "Google Gemini",
+      model: "gemini-2.0-flash",
+      apiKeyName: "GOOGLE_API_KEY",
+      packageName: "langchain[google-genai]",
+    },
+    {
       value: "google_vertexai",
       label: "Google Vertex",
       model: "gemini-2.0-flash-001",
@@ -218,6 +225,13 @@ ${llmVarName} = ChatWatsonx(
       apiKeyName: "XAI_API_KEY",
       packageName: "langchain-xai",
     },
+    {
+      value: "perplexity",
+      label: "Perplexity",
+      model: "llama-3.1-sonar-small-128k-online",
+      apiKeyName: "PPLX_API_KEY",
+      packageName: "langchain-perplexity",
+    }
   ].map((item) => ({
     ...item,
     ...overrideParams?.[item.value],
